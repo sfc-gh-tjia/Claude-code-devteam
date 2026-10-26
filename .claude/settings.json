@@ -1,0 +1,49 @@
+{
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python3 harness/referee.py:*)",
+      "Bash(python3 harness/tokens.py:*)",
+      "Bash(make doctor)",
+      "Bash(make verify)",
+      "Bash(make status)",
+      "Bash(make tokens)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)"
+    ],
+    "ask": [
+      "Edit(.claude/**)",
+      "Write(.claude/**)",
+      "Edit(harness/**)",
+      "Write(harness/**)",
+      "Bash(git push:*)",
+      "Bash(python3 harness/referee.py reset:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.snowflake/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/harness/guard.py\" --role lead"
+          }
+        ]
+      }
+    ]
+  }
+}
