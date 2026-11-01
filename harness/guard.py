@@ -238,6 +238,17 @@ def decide(role: str, ev: dict):
     return None
 
 
+def resolve_role(role: str, ev: dict) -> str:
+    """The settings.json hook is registered as --role lead but also fires inside subagents. Claude Code puts the
+    subagent's name in the hook input's agent_type, and frontmatter hooks do not run at all in an untrusted workspace
+    (such as a headless CI run), so a DevTeam role named there takes precedence over lead. Other agent types
+    (general-purpose, Explore, ...) are the lead's own helpers and keep the lead policy."""
+    agent = ev.get("agent_type")
+    if role == "lead" and agent in WRITES:
+        return agent
+    return role
+
+
 def log(role: str, ev: dict, res) -> None:
     p = Path(os.environ.get("DEVTEAM_HOOK_LOG") or ROOT / ".loop" / "hook.log")
     try:
@@ -246,7 +257,7 @@ def log(role: str, ev: dict, res) -> None:
         what = inp.get("file_path") or inp.get("command") or ""
         with open(p, "a") as f:
             f.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "role": role, "tool": ev.get("tool_name"),
-                                "decision": res[0] if res else "pass", "what": str(what)[:160],
+                                "agent_type": ev.get("agent_type"), "decision": res[0] if res else "pass", "what": str(what)[:160],
                                 "why": res[1][:200] if res else ""}) + "\n")
     except OSError:
         pass
@@ -258,6 +269,7 @@ def main() -> int:
     role = ap.parse_args().role
     try:
         ev = json.loads(sys.stdin.read() or "{}")
+        role = resolve_role(role, ev)
         res = decide(role, ev)
     except Exception as e:  # fail closed
         ev, res = {}, ("deny", f"guard error: {e!r}"[:300])

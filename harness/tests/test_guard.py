@@ -24,8 +24,10 @@ def root(tmp_path):
     return r
 
 
-def run(root, role, tool, **inp):
+def run(root, role, tool, agent_type=None, **inp):
     ev = {"tool_name": tool, "tool_input": inp, "cwd": str(root)}
+    if agent_type:
+        ev["agent_type"] = agent_type  # Claude Code sets this when the hook fires inside a subagent
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root), "DEVTEAM_HOOK_LOG": str(root / "hook-test.log")}
     out = subprocess.run([sys.executable, str(root / "harness" / "guard.py"), "--role", role],
                          input=json.dumps(ev), capture_output=True, text=True, env=env).stdout.strip()
@@ -106,3 +108,27 @@ def test_only_runner_and_lead_invoke_referee(root):
     assert run(root, "implementer", "Bash", command="python3 -m pytest -q tests") == "pass"
     assert run(root, "runner", "Bash", command="python3 harness/referee.py integrate 0001") == "pass"
     assert run(root, "lead", "Bash", command="python3 harness/referee.py status") == "pass"
+
+
+def test_settings_hook_applies_the_subagents_role(root):
+    """Frontmatter hooks do not run in an untrusted workspace (e.g. headless CI); the settings.json hook,
+    registered as --role lead, must then enforce the subagent's own role from the hook input."""
+    freeze(root)
+    wt = root / ".worktrees" / "task-0001"
+    assert run(root, "lead", "Bash", agent_type="reviewer", command="echo x > src/calc.py") == "deny"
+    assert run(root, "lead", "Bash", agent_type="implementer", command="python3 harness/referee.py integrate 0001") == "deny"
+    assert run(root, "lead", "Write", agent_type="implementer", file_path=str(root / "src" / "calc.py")) == "deny"
+    assert run(root, "lead", "Write", agent_type="implementer", file_path=str(wt / "src" / "calc.py")) == "pass"
+    assert run(root, "lead", "Bash", agent_type="runner", command="python3 harness/referee.py check 0001") == "pass"
+
+
+def test_lead_and_unknown_agents_keep_lead_policy(root):
+    assert run(root, "lead", "Write", file_path=str(root / "src" / "calc.py")) == "pass"
+    assert run(root, "lead", "Write", agent_type="general-purpose", file_path=str(root / "src" / "calc.py")) == "pass"
+    assert run(root, "lead", "Bash", agent_type="Explore", command="python3 harness/referee.py status") == "pass"
+
+
+def test_log_records_resolved_role(root):
+    run(root, "lead", "Bash", agent_type="reviewer", command="ls")
+    last = json.loads((root / "hook-test.log").read_text().strip().splitlines()[-1])
+    assert last["role"] == "reviewer" and last["agent_type"] == "reviewer"
