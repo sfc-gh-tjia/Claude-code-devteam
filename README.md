@@ -33,7 +33,8 @@ Models propose; deterministic code decides. Every rule below exists because some
 | Every role ran on Opus | Opus judges, Sonnet executes, Haiku relays. Only the last attempt escalates to Opus |
 | A relay model retyped 24 KB payloads and corrupted them | **Pass by reference.** Every referee command prints one line of 900 bytes or less, and agents write their verdicts to `.loop/runs/<id>/` themselves |
 | Implementers "fixed" the tests instead of the code | Tests are frozen with checksums. `check` restores any edited frozen test and reports it, and the guard blocks the write in the first place |
-| Prompt-only rules failed (an agent dropped 3 databases) | `guard.py` enforces each role's permissions in code: writes outside its paths, git writes and destructive commands are denied |
+| Prompt-only rules failed (an agent dropped 3 databases) | `guard.py` checks each role's tool calls in code: writes outside its paths, git writes, referee commands and destructive commands are denied. It is a guardrail, not a sandbox (see Known limits) |
+| A passing check could stand in for a review | `integrate` refuses unless the latest verdict of every required reviewer names the exact commit being merged and has no blocking finding |
 | A gate hung for 10 hours | Every command has a timeout, and its process group is killed on expiry |
 | About a third of blocks were environmental (dependencies, ports, the sandbox) | `doctor` checks the environment before any agent runs. Triage routes environment and flaky failures to a re-check that spends no attempt |
 | Security problems were first found at the end of a milestone | Risk-lane tasks (auth, SQL, money, deletion) get a `security-prober` before merge |
@@ -61,7 +62,7 @@ Models propose; deterministic code decides. Every rule below exists because some
 git clone https://github.com/sfc-gh-tjia/Claude-code-devteam.git ~/devteam
 cd ~/devteam
 python3 -m pip install pytest     # if you don't have it
-make harness-test                 # 19 tests: referee lifecycle, guard decisions, a no-LLM simulation of the workflow
+make harness-test                 # 22 tests: referee lifecycle, guard decisions, a no-LLM simulation of the workflow
 ```
 
 ### Step 2: Install it into your project
@@ -223,6 +224,7 @@ The lead reports what merged, what blocked (with a code), and follow-ups. Detail
 | `REVIEW_ROUNDS` | Blocking findings survived the fix rounds | It's a design problem: write `work/adr/ADR-NNN.md`, amend the tasks, `reset ID` |
 | `MERGE_CONFLICT` | Two tasks touched the same code | `reset ID` and relaunch (it rebuilds on the new main) |
 | `MAIN_RED_AFTER_MERGE` | Smoke failed on main; the merge was auto-reverted | Investigate the smoke gate, then `unblock ID` |
+| `REVIEW_MISSING` / `REVIEW_STALE` / `REVIEW_BLOCKING` | `integrate` found no verdict from a required reviewer, a verdict for another commit, or a blocking finding | A reviewer failed to write its verdict file: relaunch. Repeated: read `.loop/runs/ID/` via `explorer` |
 | `RUNNER_REFUSED` | The relay agent read chat text as a competing request | Relaunch right after a plain one-line request |
 | `TOKEN_CAP` | The run hit `budgets.run_output_tokens` | Raise the cap or split the phase |
 
@@ -331,6 +333,8 @@ Runtime state is gitignored: `.worktrees/task-NNNN/` (one per task) and `.loop/`
 | The guard blocks something legitimate | Read its reason in `.loop/hook.log` (one JSON line per decision), then adjust `WRITES` in `harness/guard.py` if the role really needs it |
 
 ## Known limits
+
+- **The guard is a guardrail, not a sandbox.** It checks each tool call, but a general-purpose interpreter it allows (`python3 -c`, `node -e`) can still write files outside a role's paths. The backstops are the referee's checks: frozen tests are restored, out-of-scope diffs are refused, `integrate` requires current review verdicts and a clean main checkout, and a red main is reverted. For unattended runs, add OS-level isolation (a sandbox, container or separate user).
 
 - **What's tested:** the referee and guard have real tests, and the workflow's control flow is checked by a simulation with stubbed agents. How well the prompts and models behave on your codebase is something a pilot phase shows.
 - **Detached jobs** assume the Bash sandbox lets a child process outlive its command. If not, raise `budgets.bash_wait_s` toward 590, or keep gates under about 9 minutes.

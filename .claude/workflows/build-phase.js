@@ -30,7 +30,7 @@ const RUNNER_OUT = S({ stdout: STR })
 const QA_DESIGN = S({ tests: STRS, done_when_map: { type: 'array', items: S({ item: STR, tests: STRS }) }, notes: STR }, ['tests', 'done_when_map'])
 const REPORT = S({ summary: STR, files_changed: STRS, tests_run: STR, unsure_about: STRS, did_not_do: STRS }, ['summary', 'files_changed', 'tests_run'])
 const FINDING = S({ file: STR, line: { type: 'integer' }, scenario: STR }, ['file', 'scenario'])
-const VERDICT = S({ verdict: { type: 'string', enum: ['approve', 'request_changes'] }, blocking: { type: 'array', items: FINDING }, minor: STRS }, ['verdict', 'blocking'])
+const VERDICT = S({ verdict: { type: 'string', enum: ['approve', 'request_changes'] }, reviewed_sha: STR, blocking: { type: 'array', items: FINDING }, minor: STRS }, ['verdict', 'reviewed_sha', 'blocking'])
 const QA_FUNC = S({ scenarios_run: { type: 'integer' }, defects: { type: 'array', items: S({ severity: { type: 'string', enum: ['major', 'minor'] }, repro: STR, expected: STR, actual: STR }, ['severity', 'repro']) } })
 const TRIAGE = S({ cause: { type: 'string', enum: ['env', 'test_design', 'transient', 'impl'] }, confidence: { type: 'number' }, evidence: STR }, ['cause', 'evidence'])
 const PRECHECK = S({ key: STR, blocking: { type: 'array', items: S({ task: STR, issue: STR, fix: STR }, ['task', 'issue']) }, advisories: STRS }, ['key', 'blocking'])
@@ -82,15 +82,16 @@ Classify the ROOT cause:
 - transient: a flaky timing or race issue that a re-run would likely pass.
 - impl: the implementation is wrong or incomplete.
 Write {cause, confidence, evidence} to .loop/runs/${id}/triage.json and return the same object.`
-const reviewPrompt = (id, wt, r) => `Review task ${id}, round ${r}. The diff against main is in .loop/runs/${id}/diff.patch. Spec: ${spec(id)}. Worktree: ${wt}.
+const stamp = sha => ` You are reviewing commit ${sha}: put it in "reviewed_sha"; the referee refuses verdicts for any other commit.`
+const reviewPrompt = (id, wt, r, sha) => `Review task ${id}, round ${r}. The diff against main is in .loop/runs/${id}/diff.patch.${stamp(sha)} Spec: ${spec(id)}. Worktree: ${wt}.
 A finding is blocking only if it is a concrete defect (give file, line and a failure scenario) or a Done When item that is not met. Style points are minor.${r > 1 ? ` Earlier rounds' verdicts are in .loop/runs/${id}/review-r*.json: check that each blocking finding is fixed.` : ''}
 Write your verdict JSON to .loop/runs/${id}/review-r${r}.json and return the same object.`
 const qaFuncPrompt = (id, wt, r) => `Exercise task ${id} the way a user would. Spec: ${spec(id)}. Worktree: ${wt}.
 Run the feature, not just the tests: happy path, edge cases, bad input, and each Done When item. Put scratch files in /tmp.
 Report each defect with its severity (major = a broken Done When or wrong behaviour), a repro, and the expected and actual results. Write the JSON to .loop/runs/${id}/qa-r${r}.json and return it.`
-const securityPrompt = (id, wt, r) => `Try to break task ${id} (risk lane). Spec: ${spec(id)}. Diff: .loop/runs/${id}/diff.patch. Worktree: ${wt}.
+const securityPrompt = (id, wt, r, sha) => `Try to break task ${id} (risk lane). Spec: ${spec(id)}. Diff: .loop/runs/${id}/diff.patch. Worktree: ${wt}.${stamp(sha)}
 Probe injection, authorization bypass, races and time-of-check bugs, input limits, secrets in code or logs, and destructive paths. Use real probes, with scratch files in /tmp. Blocking = an exploit you can demonstrate (file, line, scenario). Write the verdict to .loop/runs/${id}/security-r${r}.json and return it.`
-const uiPrompt = (id, wt, r) => `Review the UI of task ${id} (ui lane). Spec: ${spec(id)}; its Notes say how to run the app. Worktree: ${wt}.
+const uiPrompt = (id, wt, r, sha) => `Review the UI of task ${id} (ui lane). Spec: ${spec(id)}; its Notes say how to run the app. Worktree: ${wt}.${stamp(sha)}
 Render the screens the task touches, screenshot them into /tmp, and compare them with the spec: layout, copy, states (empty, loading, error) and narrow widths. Blocking = a spec mismatch or a broken state, not a matter of taste. Write the verdict to .loop/runs/${id}/ui-r${r}.json and return it.`
 
 // ---------------------------------------------------------------- one task
@@ -141,10 +142,10 @@ async function buildTask(t, B, WTD) {
 
   for (let r = 1; r <= B.review_rounds + 1; r++) {
     res.rounds = r
-    const panel = [() => ask(reviewPrompt(id, wt, r), { agentType: 'reviewer', schema: VERDICT, phase: 'Review', label: `${id} review r${r}` }).then(v => ({ who: 'review', v }))]
+    const panel = [() => ask(reviewPrompt(id, wt, r, ck.sha), { agentType: 'reviewer', schema: VERDICT, phase: 'Review', label: `${id} review r${r}` }).then(v => ({ who: 'review', v }))]
     if (lane !== 'light') panel.push(() => ask(qaFuncPrompt(id, wt, r), { agentType: 'qa-functional', schema: QA_FUNC, phase: 'Review', label: `${id} qa r${r}` }).then(v => ({ who: 'qa', v })))
-    if (lane === 'risk') panel.push(() => ask(securityPrompt(id, wt, r), { agentType: 'security-prober', schema: VERDICT, phase: 'Review', label: `${id} security r${r}` }).then(v => ({ who: 'security', v })))
-    if (lane === 'ui') panel.push(() => ask(uiPrompt(id, wt, r), { agentType: 'ui-reviewer', schema: VERDICT, phase: 'Review', label: `${id} ui r${r}` }).then(v => ({ who: 'ui', v })))
+    if (lane === 'risk') panel.push(() => ask(securityPrompt(id, wt, r, ck.sha), { agentType: 'security-prober', schema: VERDICT, phase: 'Review', label: `${id} security r${r}` }).then(v => ({ who: 'security', v })))
+    if (lane === 'ui') panel.push(() => ask(uiPrompt(id, wt, r, ck.sha), { agentType: 'ui-reviewer', schema: VERDICT, phase: 'Review', label: `${id} ui r${r}` }).then(v => ({ who: 'ui', v })))
     const vs = (await parallel(panel)).filter(Boolean)
     if (!vs.find(x => x.who === 'review' && x.v)) return block('REVIEWER_FAILED') // never merge unreviewed
     const blocking = []

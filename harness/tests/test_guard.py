@@ -94,3 +94,15 @@ def test_fails_closed_on_bad_input(root):
     out = subprocess.run([sys.executable, str(root / "harness" / "guard.py"), "--role", "implementer"],
                          input="{not json", capture_output=True, text=True, env=env).stdout
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_only_runner_and_lead_invoke_referee(root):
+    for role in ("implementer", "reviewer", "qa-designer", "triage", "spec-author"):
+        for c in ["python3 harness/referee.py integrate 0001",
+                  "cd .worktrees/task-0001 && python3 ../../harness/referee.py check 0001",
+                  f"python3 {root}/harness/referee.py reset 0002",
+                  "python3 -m pytest -q && ./harness/referee.py unblock 0001"]:
+            assert run(root, role, "Bash", command=c) == "deny", (role, c)
+    assert run(root, "implementer", "Bash", command="python3 -m pytest -q tests") == "pass"
+    assert run(root, "runner", "Bash", command="python3 harness/referee.py integrate 0001") == "pass"
+    assert run(root, "lead", "Bash", command="python3 harness/referee.py status") == "pass"

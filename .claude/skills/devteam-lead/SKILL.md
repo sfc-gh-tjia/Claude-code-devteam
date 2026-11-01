@@ -47,6 +47,7 @@ Measured across three earlier builds, the lead's own context was 41–97% of tot
 | `REVIEW_ROUNDS` | Blocking findings survive the fix rounds | It's a design problem: write `work/adr/ADR-NNN.md`, amend the spec and tasks, `reset` |
 | `MERGE_CONFLICT` | Two tasks touched the same code | `reset ID` and relaunch (it rebuilds on the new main) |
 | `MAIN_RED_AFTER_MERGE` | Smoke failed on main; the merge was auto-reverted | Investigate the smoke gate, then `unblock` |
+| `REVIEW_MISSING` / `REVIEW_STALE` / `REVIEW_BLOCKING` | `integrate` found no verdict, a verdict for another commit, or a blocking finding | Relaunch; if it repeats, read `.loop/runs/ID/` via `explorer` |
 | `RUNNER_REFUSED` | The relay agent read chat text as a competing request | Relaunch right after a plain one-line request from the human |
 | `TOKEN_CAP` | The run hit `budgets.run_output_tokens` | Raise the cap or split the phase |
 

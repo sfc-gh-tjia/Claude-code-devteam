@@ -28,10 +28,19 @@ light = ["docs/**"]
 """
 
 
-def task_md(tid, phase="01", files=(), tests=(), deps=(), title="t"):
+def task_md(tid, phase="01", files=(), tests=(), deps=(), title="t", lane=None):
     q = lambda xs: "[" + ", ".join(f'"{x}"' for x in xs) + "]"
+    ln = f'lane = "{lane}"\n' if lane else ""
     return (f'+++\nid = "{tid}"\nphase = "{phase}"\ntitle = "{title}"\ndepends_on = {q(deps)}\n'
-            f"files = {q(files)}\ntests = {q(tests)}\n+++\n\n## Goal\n{title}\n")
+            f"files = {q(files)}\ntests = {q(tests)}\n{ln}+++\n\n## Goal\n{title}\n")
+
+
+def verdict(repo, tid, sha, who="review", r=1, blocking=()):
+    """Write a reviewer verdict the way the workflow's reviewers do."""
+    p = repo / ".loop" / "runs" / tid / f"{who}-r{r}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"verdict": "request_changes" if blocking else "approve", "reviewed_sha": sha,
+                             "blocking": [{"file": "src/calc.py", "line": 1, "scenario": b} for b in blocking]}))
 
 
 @pytest.fixture
@@ -75,8 +84,8 @@ def add_task(repo, tid, **kw):
 ADD_TEST = "from src.calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
 
 
-def build_to_frozen(repo, tid="0001"):
-    add_task(repo, tid, files=["src/calc.py"], tests=[f"tests/acceptance/test_{tid}.py"])
+def build_to_frozen(repo, tid="0001", lane=None):
+    add_task(repo, tid, files=["src/calc.py"], tests=[f"tests/acceptance/test_{tid}.py"], lane=lane)
     assert ref(repo, "doctor")["passed"]
     assert ref(repo, "prepare", tid)["passed"]
     w = repo / ".worktrees" / f"task-{tid}"
@@ -92,6 +101,7 @@ def test_happy_path_merges_and_reaps(repo):
     (w / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
     ck = ref(repo, "check", "0001")
     assert ck["passed"], ck
+    verdict(repo, "0001", ck["sha"])
     ig = ref(repo, "integrate", "0001")
     assert ig["passed"], ig
     log = subprocess.run(["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True).stdout
@@ -147,7 +157,9 @@ def test_gates_red_then_green(repo):
 def test_smoke_red_after_merge_reverts(repo):
     w = build_to_frozen(repo)
     (w / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
-    assert ref(repo, "check", "0001")["passed"]
+    ck = ref(repo, "check", "0001")
+    assert ck["passed"]
+    verdict(repo, "0001", ck["sha"])
     cfgp = repo / "harness" / "project.toml"  # smoke-only gate that fails on main
     cfgp.write_text(cfgp.read_text() + '\n[[gates]]\nid = "smoke-only"\ncmd = "false"\ncheck = false\nintegrate = false\nphase = false\nsmoke = true\n')
     subprocess.run(["git", "commit", "-qam", "cfg"], cwd=repo, check=True)
@@ -188,3 +200,28 @@ def test_doctor_reports_failures(repo):
     cfgp.write_text(cfgp.read_text() + '\n[[doctor]]\nname = "db"\ncmd = "echo no database >&2; false"\n')
     d = ref(repo, "doctor")
     assert not d["passed"] and any("db" in f for f in d["failures"])
+
+
+def test_integrate_requires_current_unblocked_review(repo):
+    w = build_to_frozen(repo)
+    (w / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    ck = ref(repo, "check", "0001")
+    assert ck["passed"] and len(ck["sha"]) == 40
+    assert ref(repo, "integrate", "0001")["code"] == "REVIEW_MISSING"
+    verdict(repo, "0001", "0" * 40)  # reviewed some other commit
+    assert ref(repo, "integrate", "0001")["code"] == "REVIEW_STALE"
+    verdict(repo, "0001", ck["sha"], blocking=["off by one"])
+    assert ref(repo, "integrate", "0001")["code"] == "REVIEW_BLOCKING"
+    verdict(repo, "0001", ck["sha"], r=2)  # the latest round decides
+    assert ref(repo, "integrate", "0001")["passed"]
+
+
+def test_risk_lane_also_requires_security_verdict(repo):
+    w = build_to_frozen(repo, "0020", lane="risk")
+    (w / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    ck = ref(repo, "check", "0020")
+    verdict(repo, "0020", ck["sha"])
+    ig = ref(repo, "integrate", "0020")
+    assert ig["code"] == "REVIEW_MISSING" and "security" in ig["msg"], ig
+    verdict(repo, "0020", ck["sha"], who="security")
+    assert ref(repo, "integrate", "0020")["passed"]

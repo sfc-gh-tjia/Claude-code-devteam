@@ -10,6 +10,8 @@ const [, , wfPath, repo, scenarioPath] = process.argv
 const sc = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'))
 const calls = []
 const attempts = {}
+// Real reviewers copy the commit named in their prompt into reviewed_sha; the stubs do the same.
+const reviewedSha = prompt => (prompt.match(/\bcommit ([0-9a-f]{40})\b/) || [])[1] || null
 const write = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, s) }
 
 async function agent(prompt, opts) {
@@ -42,12 +44,17 @@ async function agent(prompt, opts) {
   if (role === 'reviewer') {
     const r = Number((opts.label.match(/r(\d+)/) || [])[1] || 1)
     const blocking = (sc.tasks[id].review_blocking_rounds || 0) >= r ? [{ file: 'src/x.py', line: 1, scenario: 'stub defect' }] : []
-    const v = { verdict: blocking.length ? 'request_changes' : 'approve', blocking, minor: [] }
+    const v = { verdict: blocking.length ? 'request_changes' : 'approve', reviewed_sha: reviewedSha(prompt), blocking, minor: [] }
     write(path.join(repo, '.loop/runs', id, `review-r${r}.json`), JSON.stringify(v))
     return v
   }
   if (role === 'qa-functional') return { scenarios_run: 3, defects: [] }
-  if (role === 'security-prober' || role === 'ui-reviewer') return { verdict: 'approve', blocking: [] }
+  if (role === 'security-prober' || role === 'ui-reviewer') {
+    const r = Number((opts.label.match(/r(\d+)/) || [])[1] || 1)
+    const v = { verdict: 'approve', reviewed_sha: reviewedSha(prompt), blocking: [] }
+    write(path.join(repo, '.loop/runs', id, `${role === 'ui-reviewer' ? 'ui' : 'security'}-r${r}.json`), JSON.stringify(v))
+    return v
+  }
   if (role === 'phase-reviewer') {
     const out = { findings: [], follow_ups: [{ title: 'stub follow-up', why: 'sim' }], learnings: ['sim learning'] }
     write(path.join(repo, '.loop/runs', `phase-${sc.phase}`, 'review.json'), JSON.stringify(out))
