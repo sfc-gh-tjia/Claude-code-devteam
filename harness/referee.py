@@ -463,8 +463,26 @@ def v_check(a) -> dict:
     s["history"].append({"code": code, "failing": [g["id"] for g in out["gates"] if not g["passed"]], "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
     s["last_check"] = {"sha": out["sha"], "passed": out["passed"]}
     save_state(a.id, s)
-    return {"passed": out["passed"], "code": code, "failing": s["history"][-1]["failing"],
+    return {"passed": out["passed"], "code": code, "failing": s["history"][-1]["failing"], "sha": out["sha"],
             "out_of_scope": out["out_of_scope"][:5], "frozen_restored": touched[:5], "detail": rel(rd / "check.json")}
+
+
+# Verdicts integrate requires: the reviewer for every lane, plus the lane's specialist.
+REQUIRED_REVIEWS = {"risk": ("review", "security"), "ui": ("review", "ui")}
+
+
+def review_gate(tid: str, lane: str, head: str) -> None:
+    """Refuses integration unless each required reviewer's latest verdict covers `head` with no blocking finding.
+    A passing check is not a review: this keeps a caller that skips the review panel from merging."""
+    for who in REQUIRED_REVIEWS.get(lane, ("review",)):
+        rounds = sorted(runs(tid).glob(f"{who}-r*.json"), key=lambda p: int(p.stem.rsplit("-r", 1)[1] or 0))
+        v = read_json(rounds[-1], {}) if rounds else {}
+        if not v:
+            raise Fail("REVIEW_MISSING", f"no {who} verdict for task {tid}")
+        if v.get("reviewed_sha") != head:
+            raise Fail("REVIEW_STALE", f"the latest {who} verdict reviewed {str(v.get('reviewed_sha'))[:10]}, not HEAD {head[:10]}")
+        if v.get("blocking"):
+            raise Fail("REVIEW_BLOCKING", f"the latest {who} verdict has {len(v['blocking'])} blocking finding(s)")
 
 
 def evidence(tid: str, s: dict) -> dict:
@@ -479,6 +497,7 @@ def v_integrate(a) -> dict:
     lc = s.get("last_check") or {}
     if not (lc.get("passed") and lc.get("sha") == git("rev-parse", "HEAD", cwd=w)):
         raise Fail("NOT_CHECKED", "run `check` on the task's current HEAD first")
+    review_gate(a.id, s["lane"], lc["sha"])
     with integrate_lock():
         ev = w / "work" / "evidence" / f"{a.id}.json"
         write_json(ev, evidence(a.id, s))

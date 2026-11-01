@@ -204,6 +204,9 @@ def check_bash(role: str, cmd: str, cwd: str) -> tuple[str, str] | None:
         return ("deny", f"could not parse the command ({e}); split it into simpler commands")
     for seg in segs:
         exe = os.path.basename(seg[0]) if seg else ""
+        if any(os.path.basename(w) == "referee.py" for w in seg):
+            # Referee verbs change task state (integrate, reset, unblock); only the workflow's runner calls them.
+            return ("deny", "only the build-phase runner may run harness/referee.py; report to the lead instead")
         if exe == "git":
             v = git_verb(seg)
             if v in GIT_WRITE and not (v == "branch" and len(seg) <= 3 and "-D" not in seg and "-d" not in seg):
