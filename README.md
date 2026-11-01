@@ -62,7 +62,7 @@ Models propose; deterministic code decides. Every rule below exists because some
 git clone https://github.com/sfc-gh-tjia/Claude-code-devteam.git ~/devteam
 cd ~/devteam
 python3 -m pip install pytest     # if you don't have it
-make harness-test                 # 22 tests: referee lifecycle, guard decisions, a no-LLM simulation of the workflow
+make harness-test                 # 25 tests: referee lifecycle, guard decisions, a no-LLM simulation of the workflow
 ```
 
 ### Step 2: Install it into your project
@@ -334,6 +334,7 @@ Runtime state is gitignored: `.worktrees/task-NNNN/` (one per task) and `.loop/`
 
 ## Known limits
 
+- **How the guard knows the role.** Each agent's frontmatter registers `guard.py --role <role>`, but Claude Code skips frontmatter hooks in a workspace you have not trusted (including headless `claude -p` runs, such as CI). The `settings.json` hook (`--role lead`) runs everywhere, inside subagents too, so the guard takes the role from the hook input's `agent_type` when it names a DevTeam role. Other agent types keep the lead policy.
 - **The guard is a guardrail, not a sandbox.** It checks each tool call, but a general-purpose interpreter it allows (`python3 -c`, `node -e`) can still write files outside a role's paths. The backstops are the referee's checks: frozen tests are restored, out-of-scope diffs are refused, `integrate` requires current review verdicts and a clean main checkout, and a red main is reverted. For unattended runs, add OS-level isolation (a sandbox, container or separate user).
 
 - **What's tested:** the referee and guard have real tests, and the workflow's control flow is checked by a simulation with stubbed agents. How well the prompts and models behave on your codebase is something a pilot phase shows.
